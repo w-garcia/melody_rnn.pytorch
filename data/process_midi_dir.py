@@ -20,9 +20,13 @@ import os
 import logging
 import data.utils_midi as midi_io
 import data.utils_sequences as note_sequence_io
+import data.utils_melodies as melodies_io
+import data.utils_encode_decode as coding_io
+
 import fnmatch
 import argparse
 
+from data.constants import *
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -39,17 +43,18 @@ def convert_directory(root_dir, out_dir):
       A map from the resulting Futures to the file paths being converted.
     """
     logger.info("Converting files in '%s'.", root_dir)
+    encoded_midis = []
+    written_count = 0
+
     for root, dirs, filenames in os.walk(root_dir):
         for f in fnmatch.filter(filenames, '*.midi') + fnmatch.filter(filenames, '*.mid'):
             full_file_path = os.path.join(root, f)
 
-            written_count = 0
             if written_count % 100 == 0:
                 logger.debug("Processed {} files so far".format(written_count))
 
             try:
                 sequence = convert_midi(root_dir, full_file_path)
-                written_count += 1
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("({}) generated an exception:".format(full_file_path))
                 logger.exception(exc)
@@ -59,11 +64,61 @@ def convert_directory(root_dir, out_dir):
                 continue
 
             # Getting closer
-            # The NoteSequence proto becomes a SequenceExample now
+            # The NoteSequence proto becomes a SequenceExample now. Have to mimic directed acyclic graph
 
+            # I guess this is the syntax:
+            # dag[op] = input
+            # dag[next_op] = op (<- out from previous line)
+            # dag[output] = next_op
+            # Becomes input -> op -> next_op -> output
 
-                # if sequence:
-                #     writer.write(sequence)
+            # Pipeline to recreate: melody_rnn_create_dataset.py:89
+            # dag[time_change_splitter] = partitioner[mode + '_melodies']
+            # dag[quantizer] = time_change_splitter
+            # dag[melody_extractor] = quantizer
+            # dag[encoder_pipeline] = melody_extractor
+            # dag[dag_pipeline.DagOutput(mode + '_melodies')] = encoder_pipeline
+
+            # If it is, then the order is:
+            # NoteSequence -> partitioner -> splitter -> quantizer -> melody extractor -> encoder -> output
+            # Don't need partitioner for now...
+
+            # time_change_splitter: note_sequence_pipelines.TimeChangeSplitter
+            split_seqs = note_sequence_io.split_note_sequence_on_time_changes(sequence)
+            # take first one, maybe in most cases its just 1 time signature
+            split_seqs = split_seqs[0]
+
+            # quantizer: note_sequence_pipelines.Quantizer
+            steps_per_quarter = 4  # just felt like putting 4
+            quantized_sequence = note_sequence_io.quantize_note_sequence(split_seqs, steps_per_quarter)
+            if not quantized_sequence:
+                continue
+            # TODO: Handle a bunch of exceptions here
+
+            # Here is where it becomes a Melody object
+            # melody_extractor: melody_pipelines.MelodyExtractor
+            # music.melodies_lib.py:675 implies I am on the right path
+            melodies = melodies_io.extract_melodies(quantized_sequence)
+            if melodies == []:
+                continue
+            #TODO: Handle more exceptions here (melody_pipeline.py)
+
+            # Now to SequenceExample, finally
+            # encoder: EncoderPipeline
+            # dag is not clear how to handle list of melodies. Just take first instrument for no
+            melody = melodies[0]
+            melody.squash(DEFAULT_MIN_NOTE, DEFAULT_MAX_NOTE, DEFAULT_TRANSPOSE_TO_KEY)
+            melody_encoding = coding_io.MelodyOneHotEncoding(DEFAULT_MIN_NOTE, DEFAULT_MAX_NOTE)
+            transcoder = coding_io.OneHotEventSequenceEncoderDecoder(melody_encoding)
+            encoded = transcoder.encode(melody)
+            if not encoded:
+                continue
+
+            encoded_midis.append(encoded)
+            #TODO: Need to create dataset file.
+            written_count += 1
+
+    return encoded_midis
 
 
 def convert_midi(root_dir, full_file_path):

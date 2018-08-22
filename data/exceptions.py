@@ -1,23 +1,35 @@
 class BadTimeSignatureException(Exception):
-  pass
+    pass
 
 
 class MultipleTimeSignatureException(Exception):
-  pass
+    pass
 
 
 class MultipleTempoException(Exception):
-  pass
+    pass
 
 
 class NegativeTimeException(Exception):
-  pass
+    pass
 
 
 class QuantizationStatusException(Exception):
-  """Exception for when a sequence was unexpectedly quantized or unquantized.
+    """Exception for when a sequence was unexpectedly quantized or unquantized.
 
-  Should not happen during normal operation and likely indicates a programming
-  error.
-  """
-  pass
+    Should not happen during normal operation and likely indicates a programming
+    error.
+    """
+    pass
+
+
+class PolyphonicMelodyException(Exception):
+    pass
+
+
+class BadNoteException(Exception):
+    pass
+
+
+class NonIntegerStepsPerBarException(Exception):
+    pass
